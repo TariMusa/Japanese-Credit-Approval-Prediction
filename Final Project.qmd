@@ -1,0 +1,777 @@
+---
+title: "Final Project"
+execute: 
+  warning: false
+author: "Tariro Musarandega"
+format: 
+  html:
+    embed-resources: true
+---
+
+“All work presented is my own, and I have followed all rules for collaboration. I have not discussed this project with anyone outside of students currently enrolled in this course, and I have listed any such students at the top of my project. If I used any AI, StackExchange, etc. on this assignment, I have clearly stated both (1) what my search prompt was and (2) what I used from the AI answer.”
+
+:   Tariro Musarandega \~
+
+
+
+# Introduction
+
+The objective of this project is to predict credit card approval outcomes using the k-nearest neighbors (KNN) classification method. I would like to determine the most effective configuration of KNN to achieve the highest classification rate in predicting whether a credit card application is approved or declined by a bank. The project will involve analyzing various applicant features such as age, income, and credit history. I will also evaluate how some of these predictors relate to the likelihood of approval. Specific questions will include exploring which age group is more likely to be approved. By understanding the relationships between applicant characteristics and approval outcomes, the project aims to provide valuable insights into credit risk assessment, assuming that the approval of credit cards is based on some form of credit risk assessment and use those insights to create an effective prediction model.
+
+The data used for this project is adapted from Kaggle:
+[Credit Card Approval Dataset Kaggle](https://www.kaggle.com/datasets/samuelcortinhas/credit-card-approval-clean-data)
+
+The data from Kaggle is a cleaned version of the original dataset available on the UC Irvine machine learning repository:
+[Credit Approval Dataset UCIrvine](https://archive.ics.uci.edu/dataset/27/credit+approval)
+
+The dataset originates from a credit-issuing firm in Japan, which remains anonymous to ensure privacy and data protection. It is likely from 1992 or earlier. Notably, Japanese banks and their affiliates were largely excluded from credit card lending until 1992, as the credit market was dominated by non-bank lenders, such as shimpan kaisha, which specialized in consumer finance (Mann, 2001). This suggests that the institution providing this data was likely a non-bank entity. Additionally, the dataset reflects an emerging market rather than a developed one and should not be assumed to represent steady-state credit card approval trends in Japan.  It has 16 columns:
+
+-   `Gender` categorical, encoded as 0 for female and 1 for male.
+
+-   `Age` numerical, in years which is accurate to the nearest hundredth.
+
+-   `Debt` numerical, the amount of outstanding debt the subject has. This is scaled ranging from 0 to 28.
+
+-   `Married` categorical, encoded as 0 for no and this implies single, divorced etc and 1 for married.
+
+-   `BankCustomer` categorical, an indicator for whether the applicant is a customer of the bank or not encoded as a 1 for yes and 0 for no.
+
+-   `Industry` categorical, the industry the customer works with 14 different levels.
+
+-   `Ethnicity` categorical ethnicity with levels Black, White, Latino, Asian and Other.
+
+-   `YearsEmployed` the number of years the applicant has been employed for scaled ranging from 1 to 28.5.
+
+-   `PriorDefault` a categorical indicator about whether the applicant ever previously defaulted on loans or any other forms of credit encoded as 1 for yes and 0 for no.
+
+-   `Employment` a categorical indicator for the employment status of the applicant where 1 is for employed and 0 is for unemployed.
+
+-   `CreditScore` a scaled numeric indicator that shows the applicant's credit score scaled and ranging from 0 to 67.
+
+-   `DriversLicense` a categorical indicator for whether the applicant has a drivers' license or not where 1 is yes and 0 is no.
+
+-   `Citizen` a categorical indicator for how the applicant is a citizen of the country. Levels are ByBirth, ByOtherMeans and Temporary.
+
+-   `Zipcode` a scaled categorical indicator for the applicant's zipcode.
+
+-   `Income` a scaled numerical indicator of the applicant's income rangning from 0 to 100000. Even after scaling, this remains the indicator with the largest range.
+
+-   `Approved` the target variable, a categorical variable showing whether an applicant's application was accepted or not. Level 0 means the applicant was not approved and 1 means they were not approved.
+
+To explore the use of KNN after encoding categorical variables, I transformed several features: `Ethnicity`, `Citizen`, and `ZipCode` into numeric variables, while keeping `Approved` as a factor. Although I considered encoding Industry, doing so would have significantly increased the model's complexity. Excluding it allowed me to achieve a very satisfactory classification rate.
+
+For `ZipCode`, I first classified them into categories based on approval rates: high, medium, and low. This approach aimed to capture trends associated with areas that typically house wealthier individuals. While I didn’t have direct information about what each ZipCode represents, encoding them this way helped incorporate some of this contextual information into the model.The encoding for `Citizen` and `Ethnicity` were however standard.
+
+
+# Data exploration
+ 
+```{r}
+library(tidyverse)
+library(here)
+library(corrplot)
+library(class)
+library(knitr)
+```
+
+
+```{r}
+#| output: false
+credit_approv_df <- read_csv(here('data/Credit Approval Data.csv')) 
+
+credit_df <- credit_approv_df |>
+  mutate(Industry = as.factor(Industry)) |>
+  mutate(Ethnicity = as.factor(Ethnicity)) |>
+  mutate(Citizen = as.factor(Citizen)) |>
+  mutate(ZipCode = as.factor(ZipCode)) |>
+  mutate(Approved = as.factor(Approved)) |>
+  mutate(Approved = fct_recode(Approved, "Yes" = "1", "No" = "0")) |>
+  # Normalize numeric columns
+  mutate(across(where(is.numeric), ~ (.x - min(.x)) / (max(.x) - min(.x))))
+```
+
+
+```{r}
+credit_df <- credit_df |>
+  group_by(ZipCode) |>
+  mutate(ApprovalRate = mean(as.numeric(Approved == "Yes"))) |>
+  ungroup() |>
+  mutate(
+    ZipCode = case_when(
+      ApprovalRate > 0.75 ~ "HighApproval",
+      ApprovalRate > 0.5 ~ "MediumApproval",
+      TRUE ~ "LowApproval"
+    )
+  ) |>
+  mutate(ZipCode = as.factor(ZipCode))
+
+```
+
+
+```{r}
+credit_df <- credit_df |>
+  bind_cols(
+    model.matrix(~ ZipCode - 1, data = credit_df)
+  ) |>
+  rename(
+    zip_high = ZipCodeHighApproval,
+    zip_med = ZipCodeMediumApproval,
+    zip_low = ZipCodeLowApproval
+  ) |>
+  mutate(Approved = as.factor(Approved)) |>
+  select(-ApprovalRate)
+
+```
+
+
+
+```{r}
+credit_df <- credit_df |>
+  bind_cols(
+    model.matrix(~ Ethnicity - 1, data = credit_df)
+  ) |>
+  rename_at(vars(starts_with("Ethnicity")), ~ paste("ethnicity_", ., sep = "")) |>
+  mutate(Approved = as.factor(Approved)) |>
+  rename("Asian" = ethnicity_EthnicityAsian) |>
+  rename("Black" = ethnicity_EthnicityBlack) |>
+  rename("Latino" = ethnicity_EthnicityLatino) |>
+  rename("White" = ethnicity_EthnicityWhite) |>
+  rename("Other" = ethnicity_EthnicityOther) |>
+  rename("Ethnicity" = ethnicity_Ethnicity)
+```
+
+
+```{r}
+credit_df <- credit_df |>
+  bind_cols(
+    model.matrix(~ Citizen - 1, data = credit_df)
+  ) |>
+  rename_at(vars(starts_with("Ethnicity")), ~ paste("ethnicity_", ., sep = "")) |>
+  rename("cit_birth" = CitizenByBirth) |>
+  rename("cit_temp" = CitizenTemporary) |>
+  rename("cit_other" = CitizenByOtherMeans)
+```
+
+
+
+### Age 
+
+```{r}
+credit_approv_age <-
+  credit_approv_df |>
+  mutate(Approved = as.factor(Approved)) |>
+  mutate(Approved = fct_recode(Approved, "Yes" = "1", "No" = "0")) |>
+  mutate(sum = n()) |>
+  group_by(Age, Approved) |>
+  mutate(n_approved = n()) |>
+  summarise(prop_approved = n_approved / sum) |>
+  slice(1)
+
+
+ggplot(data = credit_approv_age, aes(x = Age, fill = Approved)) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Density Plot of Proportion Approved by Age Group", x = "Age", y = "Density") +
+  theme_minimal() +
+  scale_fill_viridis_d() 
+```
+
+This density plot examines the trends in credit card approval proportions across age groups. Both the approval and rejection distributions are right-skewed, indicating that credit card applicants are concentrated in the under 30 age group. In the context of 1992 Japan, this trend could reflect the economic activity of young adults entering the workforce. Alternatively, it might signal a broader cultural shift, with younger generations beginning to transition from Japan’s traditional cash-based economy to embracing credit.
+The plot reveals that while individuals in their mid-20s receive the most approvals, they also face the highest number of rejections, suggesting this is the age group with the highest volume of credit card applications. Notably, rejection rates decline sharply after the mid-20s peak, indicating that stronger candidates for credit card approval tend to be older. For applicants under approximately 38 years old, rejections are more common than approvals. However, between the ages of 38 and 78, approval rates surpass rejection rates, suggesting that creditworthiness increases with age within this range. For this visualization, I used proportions insteaad of absolute counts so that I could provide provide insights on relative appproval rates for each age group and not just a reflection on the volume of applicants who get a certain outcome per each age group.
+
+
+
+
+
+### Marital Status
+
+```{r}
+# Calculate proportion of approval for each combination of Married and Approved
+credit_approv_married <-
+  credit_approv_df |>
+  mutate(Approved = as.factor(Approved)) |>
+  mutate(Approved = fct_recode(Approved, "Yes" = "1", "No" = "0")) |>
+  mutate(Married = as.factor(Married)) |>
+  mutate(Married = fct_recode(Married, "Yes" = "1", "No" = "0")) |>
+  mutate(sum = n()) |>
+  group_by(Married, Approved) |>
+  mutate(n_approved = n()) |>
+  summarise(prop_approved = n_approved / sum) |>
+  slice(1)
+
+
+# Create heatmap
+ggplot(data = credit_approv_married, aes(x = Approved, y = Married, fill = prop_approved)) +
+  geom_tile() +  # Use tile for heatmap
+  scale_fill_viridis_c() +  # Color scale for continuous values (proportion)
+  labs(title = "Heatmap of Proportion Approved by Marital Status",
+       x = "Approved", y = "Married", fill = "Proportion Approved") +
+  theme_minimal()  # Clean theme
+
+```
+
+This plot explores the relationship between marital status and credit card approval outcomes. The proportion of approved applicants who report being married is significantly higher than that of unmarried applicants. However, the majority of married applicants are not approved for credit cards, indicating that while married individuals are more represented in the approved group, they also form the majority in the rejected group. This suggests that most applicants for credit cards are married.
+
+Among unmarried applicants, a larger proportion are not approved, which could reflect age-related factors. For instance, younger individuals, who are less likely to be married, may also be less likely to meet the eligibility criteria for approval.
+
+The use of proportions, rather than absolute counts, ensures that the analysis is standardized across marital status groups. This approach accounts for the potentially different number of applicants within each group and allows for a clearer understanding of the likelihood of approval relative to marital status. By visualizing proportions, the plot highlights the approval trends without being skewed by differences in group sizes, making the insights more reliable and directly comparable.
+
+
+
+### Industry
+
+```{r}
+credit_approv_ind <-
+  credit_approv_df |>
+  mutate(Industry = as.factor(Industry)) |>
+  mutate(Approved = as.factor(Approved)) |>
+  mutate(Approved = fct_recode(Approved, "Yes" = "1", "No" = "0")) |>
+  mutate(sum = n()) |>
+  group_by(Industry, Approved) |>
+  mutate(n_approved = n()) |>
+  summarise(prop_approved = n_approved / sum) |>
+  slice(1)
+
+  
+ggplot(data = credit_approv_ind, aes(x = Industry, y = prop_approved, fill = Approved)) +
+  geom_bar(stat = "identity", position = "stack") + 
+  labs(title = "Approval Status by Industry", x = "Industry", y = "Proportion") +
+  theme_minimal() +
+  coord_flip() +
+  scale_fill_viridis_d()
+
+```
+
+This plot examines the trends in the proportion of credit approvals and rejections across various industries reported by applicants. While insightful, it is important to acknowledge that grouping applicants solely by industry may not fully capture their financial status. For example, a software engineer in the retail industry may have a financial profile more similar to other software engineers than to other retail workers. Grouping applicants by profession or role could provide a more nuanced understanding of their creditworthiness.
+
+The plot shows that the largest proportion of applicants are from the energy sector, which also accounts for the highest number of approvals. However, the difference between the proportion of applicants rejected and the proportion approved indicates that the energy sector does not have the highest aggregate approval rate. On the other hand, applicants in the utilities industry exhibit a higher proportion of approvals relative to the total number of applicants from this sector. This suggests that workers in utilities may meet the credit approval criteria more consistently than applicants from other industries.
+
+The use of proportions, rather than absolute counts, helps standardize the analysis by accounting for industry size variations. This method allows for a fairer comparison of approval rates across sectors, ensuring that the findings are not influenced by the number of applicants in each industry. By focusing on proportions, the plot provides clearer insights into how each industry performs relative to its size, making it easier to identify trends in credit approvals across different sectors.
+
+
+### Gender
+
+```{r}
+# Calculate proportion of approval for each combination of Married and Approved
+credit_approv_gender <-
+  credit_approv_df |>
+  mutate(Approved = as.factor(Approved)) |>
+  mutate(Approved = fct_recode(Approved, "Yes" = "1", "No" = "0")) |>
+  mutate(Gender = as.factor(Gender)) |>
+  mutate(Gender = fct_recode(Gender, "Male" = "1", "Female" = "0")) |>
+  mutate(sum = n()) |>
+  group_by(Gender, Approved) |>
+  mutate(n_approved = n()) |>
+  summarise(prop_approved = n_approved / sum)
+
+# Create heatmap
+ggplot(data = credit_approv_gender, aes(x = Approved, y = Gender, fill = prop_approved)) +
+  geom_tile() +  # Use tile for heatmap
+  scale_fill_viridis_c() +  # Color scale for continuous values (proportion)
+  labs(title = "Heatmap of Proportion Approved by Gender",
+       x = "Approved", y = "Gender", fill = "Proportion Approved") +
+  theme_minimal()  # Clean theme
+```
+
+This plot aims to investigate relationships between approval proportions and gender. The heat map suggests that generally fewer women apply as they have a lower aggregate proportion out of all of the applicants. While a larger proportion of men are approved compared to women, the larger proportion of men's applications are also rejected. This is also true for women although by a smaller margin. By a smaller margin, the proportion of women whose applications are rejected is higher than the proportion whose applications are accepted. This suggests that women generally have a higher approval rate compared to men, although this could be a result of factors like only high income women applying. This is a case where more information on the bank would have enriched my exploration. I would not expect such stark gender disparity from a metropolitan like Tokyo, although again the fact that this is a 1992 dataset could part of the reason behind this trend.
+The use of proportions, rather than absolute counts, is important in this context as it helps to normalize for any imbalance in the number of male and female applicants. This ensures that the comparison between the approval rates of men and women is not skewed by the fact that men might make up a larger portion of the applicant pool. By using proportions, we can more accurately evaluate approval rates relative to the number of applicants from each gender, giving us a clearer picture of any potential disparities.
+
+
+
+
+### Income
+
+```{r}
+credit_approv_inc <-
+  credit_approv_df |>
+  mutate(Approved = as.factor(Approved)) |>
+  mutate(Approved = fct_recode(Approved, "Yes" = "1", "No" = "0")) |>
+  mutate(sum = n()) |>
+  group_by(Income, Approved) |>
+  mutate(n_approved = n()) |>
+  summarise(prop_approved = n_approved / sum) |>
+  slice(1)
+
+ggplot(data = credit_approv_inc, aes(x = log(Income), fill = Approved)) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Density Plot of Proportion Approved by log(Income)", x = "log(Income)", y = "Density") +
+  theme_minimal() +
+  scale_fill_viridis_d() 
+```
+
+This graph aims to illustrate the relationship between approval and income. To accommodate for the large range of income values I used a log transformation of the Income for my x-axis. The density plot for the approved group has a tall, narrow peak centered around the higher income levels, it is left-skewed, indicating that those with higher incomes are much more likely to be approved for credit. Interestingly the distribution for the rejected applicants much resembles a normal distribution. It seems as though just after 6 log(Income) the proportion of those approved is higher than the proportion rejected. However, at about 5 log(Income) the proportion of rejections peak and then begin to fall after that. There are outliers at both the very low and very high income ends. This suggests there may be unique factors influencing credit approval decisions for individuals at the extreme income levels. Since the income data is scaled, we cannot make any direct inferences from this except this generalization. Proportions are particularly useful here as they allow for a clearer comparison between approval and rejection rates, regardless of the absolute number of applicants in each income group. By focusing on proportions, we avoid being misled by the larger volume of applicants in certain income ranges, making it easier to assess trends across the entire dataset. This approach also normalizes the effect of income distribution, providing a more balanced view of the credit approval process across different income levels. 
+
+
+### Ethnicity
+
+```{r}
+credit_approv_ethnicity <-
+  credit_approv_df |>
+  mutate(Approved = as.factor(Approved)) |>
+  mutate(Approved = fct_recode(Approved, "Yes" = "1", "No" = "0")) |>
+  mutate(Gender = as.factor(Ethnicity)) |>
+  mutate(sum = n()) |>
+  group_by(Ethnicity, Approved) |>
+  mutate(n_approved = n()) |>
+  summarise(prop_approved = n_approved / sum)
+
+# Create heatmap
+ggplot(data = credit_approv_ethnicity, aes(x = Approved, y = Ethnicity, fill = prop_approved)) +
+  geom_tile() +  # Use tile for heatmap
+  scale_fill_viridis_c() +  # Color scale for continuous values (proportion)
+  labs(title = "Heatmap of Proportion Approved by Ethnicity",
+       x = "Approved", y = "Ethnicity", fill = "Proportion Approved") +
+  theme_minimal()  # Clean theme
+```
+
+This plot aims to show the relationship between approval proportions and reported ethnicity. The heatmap shows that the larger proportion of applicants report to be white. As a result, people of the White ethnicity have the highest proportion of approvals, but also a significantly higher proportion of rejections. I naturally found this surprising since Japan is an Asian country that has an overwhelming Asian majority. This could be because the Japanese themselved had not embraced the culture of credit in 1992, so most of the applicants were foreigners, but I could not find any information to support this hypothesis definitively. The Black ethnicity is the only one that shows a trend where there is a larger proportion of applicants approved compared to those whose applications are rejected. This is especially striking in comparison with the Latino ethnicity that has about the same proportion of rejected applicants but an even lower approval proportion. Using proportions here is important because it helps to normalize for the different numbers of applicants in each ethnic group. Without proportions, the conclusions might be misleading, especially since some groups (like White applicants) are over represented in the data. Proportions allow us to better understand the likelihood of approval relative to the number of applicants from each ethnic group, providing a clearer comparison across groups despite differences in sample size.
+
+
+
+# Model Development
+
+The first step in this section was to split my data into a train and a test dataset. I used 70% of my data for training and then tested my model on the remaining 30% of the data. 
+
+```{r}
+set.seed(123)
+train_ratio <- 0.7
+data_split <- credit_df %>%
+  mutate(split = sample(c("train", "test"), nrow(credit_df), replace = TRUE, prob = c(train_ratio, 1 - train_ratio)))
+
+credit_train <- filter(data_split, split == "train") %>% select(-split)
+credit_test <- filter(data_split, split == "test") %>% select(-split)
+```
+
+
+
+### Choosing Predictors 
+
+```{r}
+library(viridis)
+cor_matrix <- cor(credit_df[, sapply(credit_df, is.numeric)])
+
+# Visualize correlation matrix using a heatmap
+library(corrplot)
+corrplot(cor_matrix, method = "circle", col = viridis(200),  # Creates a viridis color gradient
+         tl.col = "black")
+```
+
+The correlation plot shows that Married and Bankcustomer are very highly correlated. YearsEmployed, Age, Debt, PriorDefault, Employed and CreditScore also show relatively high correlation with other potential predictors in the plot and even more so among themselves. The encoded zipcodes are also interesting. Zip_high seems independent but there seems to be a strong negative correlation between zip_low and zip_medium. White shows some correlation with the other race indicators. Citizen by birth indicator is highly correlated with the other citizenship indicators. The citizen indicators also show high correlation with each other. 
+
+### Chi - Squared Tests
+
+For the highly correlated predictors I decided to use chi-squared tests to eliminate predictors that would make poor contributions to the classification mode. My tests were all conducted at the 0.05 significance level. If the p-value is below that, the predictors could be useful but is the p-value is greater than that then it is likely not going to contribute much to the model. For the highly correlated predictors, only one from each group will be allowed in each model tested, this process aims to reduce the number of models I get to test out. 
+
+```{r}
+# Chi-squared test for categorical variables
+table_bank <- table(credit_df$BankCustomer, credit_df$Approved)
+table_married <- table(credit_df$Married, credit_df$Approved)
+
+# Chi-squared test
+chisq.test(table_bank)
+chisq.test(table_married)
+```
+ Both BankCustomer and Married seem to be significant predictors statistically at the 0.05 significance level. Therefore they both could potentially be useful predictors. I will create models that use either of them and observe how well they perform as predictors in interaction with the other predictors in a knn model.
+
+
+```{r}
+# Perform Chi-squared tests
+chisq_test_YearsEmployed <- chisq.test(table(credit_df$YearsEmployed, credit_df$Approved))
+chisq_test_PriorDefault <- chisq.test(table(credit_df$PriorDefault, credit_df$Approved))
+chisq_test_Employed <- chisq.test(table(credit_df$Employed, credit_df$Approved))
+chisq_test_CreditScore <- chisq.test(table(credit_df$CreditScore, credit_df$Approved))
+chisq_test_Debt <- chisq.test(table(credit_df$Debt, credit_df$Approved))
+chisq_test_Age <- chisq.test(table(credit_df$Age, credit_df$Approved))
+
+# View results
+print(chisq_test_YearsEmployed)
+print(chisq_test_PriorDefault)
+print(chisq_test_Employed)
+print(chisq_test_CreditScore)
+print(chisq_test_Debt)
+print(chisq_test_Age)
+```
+
+The p-values for most of the predictors are below 0.05, therefore YearsEmployed, PriorDefault, Employed, and CreditScore could all potentially be useful predictors in my model. However, the p-value for Debt is above 0.05, so this is probably not a good predictor.  Age also has a p-value of 0.1184 that is not significant at the 0.05 significance level. This likely means that it is not a good predictor for approval. Since these are predictors that define one's financial history most definitively, I will also try either of them with combinations of the other predictors to observe how well they perform in relation and interaction with the other predictors in a knn model.
+
+
+```{r}
+# Chi-squared tests for each encoded ZipCategory
+table_zip_high <- table(credit_df$zip_high, credit_df$Approved)
+table_zip_low <- table(credit_df$zip_low, credit_df$Approved)
+table_zip_med <- table(credit_df$zip_med, credit_df$Approved)
+
+# Perform Chi-squared tests
+chisq_result_low <- chisq.test(table_zip_low)
+chisq_result_med <- chisq.test(table_zip_med)
+chisq_result_high <- chisq.test(table_zip_high)
+
+# Print the results of the Chi-squared tests
+chisq_result_low
+chisq_result_med
+chisq_result_high
+```
+
+The p-values for the encoded zip categories, zip_low and zip_med, indicate that both are statistically significant predictors of approvals. To simplify the model, I have chosen to retain zip_med and drop zip_low. This decision ensures the inclusion of a middle category, which could offer meaningful insights about applicants who do not fall into the extremes of high or low approval rates. By doing so, the model balances interpretability and predictive power while avoiding redundancy as zip_high is least correlated with zip_med.
+
+
+```{r}
+# Chi-squared tests for each encoded Ethnicity column
+table_ethnicity_asian <- table(credit_df$Asian, credit_df$Approved)
+table_ethnicity_black <- table(credit_df$Black, credit_df$Approved)
+table_ethnicity_white <- table(credit_df$White, credit_df$Approved)
+table_ethnicity_latino <- table(credit_df$Latino, credit_df$Approved)
+table_ethnicity_other <- table(credit_df$Other, credit_df$Approved)
+
+# Perform Chi-squared tests
+chisq_result_asian <- chisq.test(table_ethnicity_asian)
+chisq_result_black <- chisq.test(table_ethnicity_black)
+chisq_result_white <- chisq.test(table_ethnicity_white)
+chisq_result_latino <- chisq.test(table_ethnicity_latino)
+chisq_result_other <- chisq.test(table_ethnicity_other)
+
+# Print the results of the Chi-squared tests
+chisq_result_asian
+chisq_result_black
+chisq_result_white
+chisq_result_latino
+chisq_result_other
+
+```
+
+The encoded indicators for ethnicity show that at the 0.05 significance level black and latino are likely to be good predictors for whether someone was approved or not. 
+
+
+```{r}
+# Creating contingency tables
+table_cit_birth <- table(credit_df$cit_birth, credit_df$Approved)
+table_cit_other <- table(credit_df$cit_other, credit_df$Approved)
+table_cit_temp <- table(credit_df$cit_temp, credit_df$Approved)
+
+# Performing chi-squared tests
+chisq_result_birth <- chisq.test(table_cit_birth)
+chisq_result_other <- chisq.test(table_cit_other)
+chisq_result_temp <- chisq.test(table_cit_temp)
+
+# Printing results
+chisq_result_birth
+chisq_result_other
+chisq_result_temp
+
+```
+
+The citizen encoded indicators that seem significant are cit_birth and cit_other. The p-value for cit_temp is higher than 0.05 so it is likely not going to be a useful predictor.
+
+
+```{r}
+# Gender, Married, DriversLicense, Income, YearsEmployed, zip_high, zip_med, Asian, Black, Latino, Other, cit_other, cit_temp
+library(GGally)
+ggpairs(data = credit_train, columns = c(1, 4, 12, 8, 17, 21, 15, 16))
+
+```
+
+The plot above shows that Married, YearsEmployed, and zip_high, and black could potentially be very good predictors as they create clear groups or distinctions between the applicants who are approved and those who are not. For example, the range of the Gender boxplot spans 1 to 0 for both the Approved and unapproved applicants. This does not necessarily mean it is not a useful predictor, but, Married where the range is much smaller for those approved could be a much stronger predictor as it clearly distinguishes those who are approved from those who are not.
+
+
+```{r}
+# BankCustomer, Debt, PriorDefault, Employed, CreditScore, cit_birth
+library(GGally)
+ggpairs(data = credit_train, columns = c( 5,  9, 10, 11, 18, 22, 16))
+
+```
+
+The plot shows that almost all the predictors: BankCustomer, PriorDefault, Employed and CreditScore, and Latino create distinct groupings between those approved and those who are not approved. Zip_low however covers the full one to zero range for both of those approved and those who are not approved.  
+
+
+### Model Training
+
+From my exploration, I cam up with 8 potential models influenced mostly by the multicolinearity of the indicators:
+
+- Gender, Married, DriversLicense, Income, YearsEmployed, zip_high, zip_med, Black, Latino, cit_other, cit_birth
+
+- Gender, Married, DriversLicense, Income, PriorDefault, zip_high, zip_med, Black, Latino, cit_other, cit_birth
+
+- Gender, Married, DriversLicense, Income, Employed, zip_high, zip_med, Black, Latino, cit_other, cit_birth
+
+- Gender, Married, DriversLicense, Income, CreditScore, zip_high, zip_med, Black, Latino, cit_other, cit_birth
+
+- Gender, BankCustomer, DriversLicense, Income, YearsEmployed, zip_high, zip_med, Black, Latino, cit_other, cit_birth
+
+- Gender, BankCustomer, DriversLicense, Income, PriorDefault, zip_high, zip_med, Black, Latino, cit_other, cit_birth
+
+- Gender, BankCustomer, DriversLicense, Income, Employed, zip_high, zip_med, Black, Latino, cit_other, cit_birth
+
+- Gender, BankCustomer, DriversLicense, Income, CreditScore, zip_high, zip_med, Black, Latino, cit_other, cit_birth
+
+
+```{r}
+# Model 1
+train_1 <- credit_train |> select(Gender, Married, DriversLicense, Income, YearsEmployed, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+test_1 <- credit_test |> select(Gender, Married, DriversLicense, Income, YearsEmployed, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+
+# Model 2
+train_2 <- credit_train |> select(Gender, Married, DriversLicense, Income, PriorDefault, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+test_2 <- credit_test |> select(Gender, Married, DriversLicense, Income, PriorDefault, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+
+# Model 3
+train_3 <- credit_train |> select(Gender, Married, DriversLicense, Income, Employed, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+test_3 <- credit_test |> select(Gender, Married, DriversLicense, Income, Employed, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+
+# Model 4
+train_4 <- credit_train |> select(Gender, Married, DriversLicense, Income, CreditScore, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+test_4 <- credit_test |> select(Gender, Married, DriversLicense, Income, CreditScore, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+
+# Model 5
+train_5 <- credit_train |> select(Gender, BankCustomer, DriversLicense, Income, YearsEmployed, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+test_5 <- credit_test |> select(Gender, BankCustomer, DriversLicense, Income, YearsEmployed, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+
+# Model 6
+train_6 <- credit_train |> select(Gender, BankCustomer, DriversLicense, Income, PriorDefault, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+test_6 <- credit_test |> select(Gender, BankCustomer, DriversLicense, Income, PriorDefault, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+
+# Model 7
+train_7 <- credit_train |> select(Gender, BankCustomer, DriversLicense, Income, Employed, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+test_7 <- credit_test |> select(Gender, BankCustomer, DriversLicense, Income, Employed, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+
+# Model 8
+train_8 <- credit_train |> select(Gender, BankCustomer, DriversLicense, Income, CreditScore, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+test_8 <- credit_test |> select(Gender, BankCustomer, DriversLicense, Income, CreditScore, zip_high, zip_med, Black, Latino, cit_other, cit_birth)
+  
+
+train_cat <- credit_train$Approved
+test_cat <- credit_test$Approved
+```
+
+```{r}
+# Model 1
+knn_mod_1 <- knn(train = train_1, test = test_1, 
+                 cl = train_cat, k = 9)
+
+# Model 2
+knn_mod_2 <- knn(train = train_2, test = test_2, 
+                 cl = train_cat, k = 9)
+
+# Model 3
+knn_mod_3 <- knn(train = train_3, test = test_3, 
+                 cl = train_cat, k = 9)
+
+# Model 4
+knn_mod_4 <- knn(train = train_4, test = test_4, 
+                 cl = train_cat, k = 9)
+
+# Model 5
+knn_mod_5 <- knn(train = train_5, test = test_5, 
+                 cl = train_cat, k = 9)
+
+# Model 6
+knn_mod_6 <- knn(train = train_6, test = test_6, 
+                 cl = train_cat, k = 9)
+
+# Model 7
+knn_mod_7 <- knn(train = train_7, test = test_7, 
+                 cl = train_cat, k = 9)
+
+# Model 8
+knn_mod_8 <- knn(train = train_8, test = test_8, 
+                 cl = train_cat, k = 9)
+
+```
+
+```{r}
+# Model 1
+tab_1 <- table(knn_mod_1, test_cat)
+accuracy_1 <- sum(diag(tab_1)) / sum(tab_1)
+accuracy_1
+
+# Model 2
+tab_2 <- table(knn_mod_2, test_cat)
+accuracy_2 <- sum(diag(tab_2)) / sum(tab_2)
+accuracy_2
+
+# Model 3
+tab_3 <- table(knn_mod_3, test_cat)
+accuracy_3 <- sum(diag(tab_3)) / sum(tab_3)
+accuracy_3
+
+# Model 4
+tab_4 <- table(knn_mod_4, test_cat)
+accuracy_4 <- sum(diag(tab_4)) / sum(tab_4)
+accuracy_4
+
+# Model 5
+tab_5 <- table(knn_mod_5, test_cat)
+accuracy_5 <- sum(diag(tab_5)) / sum(tab_5)
+accuracy_5
+
+# Model 6
+tab_6 <- table(knn_mod_6, test_cat)
+accuracy_6 <- sum(diag(tab_6)) / sum(tab_6)
+accuracy_6
+
+# Model 7
+tab_7 <- table(knn_mod_7, test_cat)
+accuracy_7 <- sum(diag(tab_7)) / sum(tab_7)
+accuracy_7
+
+# Model 8
+tab_8 <- table(knn_mod_8, test_cat)
+accuracy_8 <- sum(diag(tab_8)) / sum(tab_8)
+accuracy_8
+
+```
+
+Model 2, and 6  are achieving ~0.87 classification rate so far. Both share the critical predictor PriorDefault, which captures an applicant's credit history. This feature is particularly impactful as it directly reflects past financial behavior, a strong indicator of creditworthiness. The inclusion of PriorDefault in both models reinforces its importance as a primary driver of classification accuracy, possibly making it the most important inicator for credit card approval within the context of this data. 
+Interestingly, these models differ in their use of Married (Model 2) versus BankCustomer (Model 6). This suggests that the model could be indifferent about whether you use Married or BankCustomer which is very interesting because intuitively these provide very different pieces of information and this is likely true only within the context of this dataset. 
+
+```{r}
+get_class_rate <- function(k_val) {
+  # Use k_val to build the knn model
+  knn_mod_2 <- knn(train = train_2, test = test_2,
+                   cl = train_cat, k = k_val)
+  
+  # Construct the confusion matrix
+  tab_2 <- table(knn_mod_2, test_cat)
+  
+  # Calculate classification rate
+  class_rate_2 <- sum(diag(tab_2)) / sum(tab_2)
+  
+  return(class_rate_2)
+}
+
+# Iterate through the values of k (1 to 30) and get classification rates
+kvec <- 1:30
+
+# Use purrr::map to apply get_class_rate for each k in kvec
+class_rates_2 <- purrr::map(kvec, get_class_rate)
+
+# Convert list of classification rates to a vector
+class_rate_vec_2 <- unlist(class_rates_2)
+
+# Combine kvec and classification rates into a tibble
+class_rate_2 <- tibble(kvec, class_rate_vec_2)
+print(class_rate_2, n = 30)
+
+# Visualize the classification rates using ggplot2
+ggplot(data = class_rate_2, aes(x = kvec, y = class_rate_vec_2)) + 
+  geom_line() +
+  labs(title = "Classification Rate vs k",
+       x = "k (Number of Neighbors)",
+       y = "Classification Rate") +
+  theme_minimal()
+```
+ 
+ The graph of k (number of neighbors) vs the classification rate shows that the highest rate to three decimal places is achieved when k is between 20 and 30 and the rate become ~0.88. Since with every iteration of the code, the classification rate changes, it was difficult to pick a single specific value 
+
+
+
+```{r}
+# Define the get_class_rate function for Model 6
+get_class_rate <- function(k_val) {
+  # Train the k-NN model
+  knn_mod_6 <- knn(train = train_6, test = test_6,
+                   cl = train_cat, k = k_val)
+  
+  # Construct the confusion matrix
+  tab_6 <- table(knn_mod_6, test_cat)
+  
+  # Calculate the classification rate
+  class_rate_6 <- sum(diag(tab_6)) / sum(tab_6)
+  
+  return(class_rate_6)
+}
+
+# Iterate through the range of k values
+kvec <- 1:30
+
+# Apply the get_class_rate function to each k in kvec
+class_rates_6 <- purrr::map(kvec, get_class_rate)
+
+# Convert the classification rates list to a numeric vector
+class_rate_vec_6 <- unlist(class_rates_6)
+
+# Combine kvec and classification rates into a tibble
+class_rate_6 <- tibble(kvec, class_rate_vec_6)
+print(class_rate_6, n = 30)
+
+
+# Find the k value with the highest classification rate
+best_k <- class_rate_6 %>%
+  filter(class_rate_vec_6 == max(class_rate_vec_6)) %>%
+  pull(kvec)
+
+cat("The highest classification rate is achieved at k =", best_k, "\n")
+
+# Visualize the classification rates using ggplot2
+ggplot(data = class_rate_6, aes(x = kvec, y = class_rate_vec_6)) + 
+  geom_line() +
+  labs(title = "Classification Rate vs k (Model 6)",
+       x = "k (Number of Neighbors)",
+       y = "Classification Rate") +
+  theme_minimal() 
+
+```
+
+The graph for model 6 shows that the highest classification model it achieves is at around 0.87 when k = 21.
+
+
+Although both my models are achieving a classification rate of around 0.87 at 
+k=1, I find that the performance of Model 2 is more consistent and preferable across different values of k. However, I am more inclined to believe that BankCustomer is a more important and useful predictor for credit card approval than marital status. The BankCustomer indicator reflects the applicant's established relationship with the bank, which is likely a stronger indicator of financial trustworthiness compared to whether someone is married. While marital status may carry some weight, it seems less directly relevant than BankCustomer, which directly connects to the applicant's financial history with the institution. Nevertheless, since the goal of the project is to pick a model that achieves the highest classification rate at a certain k, model 2 seems more roust in this sense. 
+
+### Results
+
+My best model has a classification rate of about ~0.87. The results are in the table below.
+
+```{r}
+final_model <- knn(train = train_2, test = test_2, 
+                 cl = train_cat, k = 26)
+final_tab <- table(final_model, test_cat)
+kable(final_tab)
+```
+
+
+### Model Assessment 
+
+To assess my model's performance I will now calculate the baseline classification rate. This is the rate at which my model correctly predicts approval status based on the scenario where classifications are based on the most popular category. In my case, rejections were more common. Therefore this calculates the classification rate in the case where all applicants are predicted to be rejected.
+
+
+```{r}
+#| output: false
+# Find the proportion of approved and rejected applicants
+credit_test |> 
+  group_by(Approved) |>
+  summarise(count = n())
+
+
+# Create a binary variable for approved (1 for 'Yes' and 0 for 'No')
+credit_test |> 
+  mutate(is_Approved = if_else((Approved == "Yes"), true = 1, false = 0)) |> 
+  # Calculate the proportion of 'Yes' approvals
+  summarise(prop_Approved = mean(is_Approved))
+
+# To calculate the baseline classification rate
+# The baseline would predict 'No' (rejection) for all, since rejection is the most common.
+baseline_class_rate <- credit_test |> 
+  mutate(is_rejected = if_else((Approved == "No"), true = 1, false = 0)) |> 
+  summarise(baseline_rate = mean(is_rejected))
+```
+
+```{r}
+print(baseline_class_rate)
+```
+
+
+The baseline classifcation rate is 0.578. My models have classification rates of up to 0.87 which means they are capturing and leveraging some useful information to make the model robust. 
+
+
+
+# Reflection
+For this project I certainly used Module 14 on Predictive Modeling the most. However I drew on Module 2 for plots, and Module 15 for the Chi-Squared Tests.
+
+It was interesting to see how strongly multicollinerity affected my model right through to the end such that I could not objectively given my parameters for a best model within the constraints of this project decide which was best. I think this actually speaks to the redundancy of data financial institutions ask from the users of their services. It prompted me to reflect on whether more data means more information or we are grossly wasting resources to store and process the same information measured in different metrics. I think indeed, this would be an interesting application of this project, increasing data privacy, that is just asking less data from people but still retaining the most important information.
+
+Furthermore, I felt that some categorical variables could be useful for my prediction and I ended up encoding them. The result was a modest increase in classification rates from about 0.82 to 0.87.  
+
+My initial challenges with the data were just understanding its context. I think this was a perfect example to me for why context matters when dealing with data. When I downloaded it I had assumed it was from a US financial institution but as I explored it more I started realizing this was unlikely. I had to find information on it, and even then it was not really enough to explain the trends. While finding the year this dataset was uploaded did help, information on its location would have been key to my analysis as well.
+
+
+# Citations
+- Mann, R. J. (2001). Credit Cards and Debit Cards in the United States and Japan. SSRN Electronic Journal. https://doi.org/10.2139/ssrn.263009
+
